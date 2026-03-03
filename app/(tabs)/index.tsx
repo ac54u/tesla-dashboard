@@ -1,9 +1,9 @@
 import * as Location from 'expo-location';
 import React, { useEffect, useRef, useState } from 'react';
 import { Platform, StatusBar, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import MapView, { PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import Animated, { useAnimatedProps, useSharedValue, withSpring } from 'react-native-reanimated';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg'; // 【修改】：引入 Path 绘制箭头
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -23,6 +23,10 @@ export default function App() {
   const isLandscape = width > height;
 
   const [speed, setSpeed] = useState<number>(0);
+  const [gear, setGear] = useState<string>('P');
+  const [battery, setBattery] = useState<number>(0);
+  const [range, setRange] = useState<number>(0);
+  const [heading, setHeading] = useState<number>(0); // 【新增】：保存航向角度
   
   const [mapRegion, setMapRegion] = useState<Region>({
     latitude: 39.9042, 
@@ -31,12 +35,8 @@ export default function App() {
     longitudeDelta: 0.01,
   });
 
-  // 【核心修复点 1】：使用 useRef 记住用户手动缩放的比例
   const currentDeltas = useRef({ latitudeDelta: 0.01, longitudeDelta: 0.01 });
-
   const dateString = "2026年3月3日 星期二 - 20:10";
-  const batteryPercent = "--%";
-  const rangeRemaining = "续航 0 km";
 
   const animatedSpeed = useSharedValue<number>(0);
   const radius = 90; 
@@ -66,13 +66,17 @@ export default function App() {
           distanceInterval: 1,
         },
         (location) => {
-          // 【核心修复点 2】：只更新经纬度，缩放比例使用 currentDeltas 记住的值
           setMapRegion({
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
             latitudeDelta: currentDeltas.current.latitudeDelta,
             longitudeDelta: currentDeltas.current.longitudeDelta,
           });
+
+          // 【新增】：更新航向数据
+          if (location.coords.heading !== null) {
+            setHeading(location.coords.heading);
+          }
 
           let currentSpeedMS = location.coords.speed;
           if (currentSpeedMS && currentSpeedMS > 0) {
@@ -92,6 +96,37 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const fetchTeslaData = async () => {
+      try {
+        const mockTeslaApiResponse = {
+          response: {
+            drive_state: { 
+              shift_state: speed > 2 ? "D" : "P"
+            },
+            charge_state: { 
+              battery_level: 84, 
+              battery_range: 265.5 
+            }
+          }
+        };
+
+        const driveData = mockTeslaApiResponse.response.drive_state;
+        const chargeData = mockTeslaApiResponse.response.charge_state;
+
+        setGear(driveData.shift_state || 'P');
+        setBattery(chargeData.battery_level);
+        setRange(Math.round(chargeData.battery_range * 1.609));
+      } catch (error) {
+        console.error("获取车辆数据失败:", error);
+      }
+    };
+
+    fetchTeslaData();
+    const interval = setInterval(fetchTeslaData, 3000);
+    return () => clearInterval(interval);
+  }, [speed]);
+
   return (
     <View style={styles.container}>
       <StatusBar hidden={true} />
@@ -101,18 +136,38 @@ export default function App() {
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         customMapStyle={customMapStyle}
         region={mapRegion} 
-        showsUserLocation={true} 
+        showsUserLocation={false} 
         showsMyLocationButton={false} 
         zoomEnabled={true}
         scrollEnabled={true}
-        // 【核心修复点 3】：当地图被手动缩放或拖动结束时，把新的缩放比例存起来
         onRegionChangeComplete={(region) => {
           currentDeltas.current = {
             latitudeDelta: region.latitudeDelta,
             longitudeDelta: region.longitudeDelta,
           };
         }}
-      />
+      >
+        {/* 【修改】：复刻图中特斯拉红色箭头图标 */}
+        <Marker
+          coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }}
+          anchor={{ x: 0.5, y: 0.5 }}
+          rotation={heading} // 让箭头随车头方向旋转
+          flat={true} // 让图标贴合地图平面，旋转时更自然
+        >
+          <View style={styles.teslaArrowContainer}>
+            <Svg width="40" height="40" viewBox="0 0 100 100">
+              {/* 绘制红色箭头路径 */}
+              <Path
+                d="M50 5 L95 95 L50 75 L5 95 Z"
+                fill="#E82127" // 特斯拉官方红
+                stroke="#FFFFFF"
+                strokeWidth="4"
+                strokeLinejoin="round"
+              />
+            </Svg>
+          </View>
+        </Marker>
+      </MapView>
 
       <View style={styles.mapOverlay} pointerEvents="none" />
 
@@ -127,23 +182,8 @@ export default function App() {
         }]}>
           
           <Svg width="220" height="220" viewBox="0 0 220 220" style={styles.svgRing}>
-            <Circle 
-              cx="110" cy="110" r={radius} 
-              stroke="#1A3314" 
-              strokeWidth={strokeWidth} 
-              fill="none" 
-            />
-            <AnimatedCircle
-              cx="110" cy="110" r={radius}
-              stroke="#39FF14" 
-              strokeWidth={strokeWidth}
-              fill="none"
-              strokeDasharray={circumference} 
-              animatedProps={animatedCircleProps} 
-              strokeLinecap="round" 
-              rotation="90" 
-              origin="110, 110" 
-            />
+            <Circle cx="110" cy="110" r={radius} stroke="#1A3314" strokeWidth={strokeWidth} fill="none" />
+            <AnimatedCircle cx="110" cy="110" r={radius} stroke="#39FF14" strokeWidth={strokeWidth} fill="none" strokeDasharray={circumference} animatedProps={animatedCircleProps} strokeLinecap="round" rotation="90" origin="110, 110" />
           </Svg>
 
           <View style={styles.speedTextContainer}>
@@ -158,14 +198,14 @@ export default function App() {
         }]}>
           <View style={styles.dataPanelRow}>
             <Text style={styles.dataPanelLabel}>GEAR</Text>
-            <Text style={styles.dataPanelValue}>--</Text>
+            <Text style={styles.dataPanelValue}>{gear}</Text>
           </View>
           <View style={styles.dataPanelRow}>
-            <Text style={styles.dataPanelValue}>{batteryPercent}</Text>
+            <Text style={styles.dataPanelValue}>{battery}%</Text>
             <Text style={styles.dataIcon}>🔋</Text>
           </View>
           <View style={styles.dataPanelRowFull}>
-            <Text style={styles.dataPanelTextFull}>{rangeRemaining}</Text>
+            <Text style={styles.dataPanelTextFull}>续航 {range} km</Text>
           </View>
         </View>
       </View>
@@ -192,4 +232,18 @@ const styles = StyleSheet.create({
   dataIcon: { fontSize: 28 },
   dataPanelRowFull: { alignItems: 'center', marginTop: 5 },
   dataPanelTextFull: { color: '#AAAAAA', fontSize: 16, fontWeight: 'bold' },
+  
+  // 【新增】：红色箭头 Marker 的容器样式
+  teslaArrowContainer: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // 给箭头增加一点立体感阴影
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
+  },
 });
