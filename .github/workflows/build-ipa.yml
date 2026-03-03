@@ -1,0 +1,57 @@
+name: Build Unsigned IPA for TrollStore
+
+# 这个配置允许我们在 GitHub 网页上手动点击按钮触发打包
+on:
+  workflow_dispatch: 
+
+jobs:
+  build-ios:
+    runs-on: macos-latest # 白嫖 GitHub 的最新版 Mac 电脑
+    
+    steps:
+      - name: 1. 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 2. 安装 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 3. 下载项目依赖包
+        run: npm install
+
+      - name: 4. 生成 iOS 原生工程目录
+        run: npx expo prebuild --platform ios --clean --no-interactive
+
+      - name: 5. 安装 iOS 底层依赖 (CocoaPods)
+        run: |
+          cd ios
+          pod install
+
+      - name: 6. 编译无签名版的 iOS 应用 (专供巨魔)
+        run: |
+          # 自动获取工程名字
+          WORKSPACE=$(ls ios | grep '\.xcworkspace$')
+          SCHEME=$(ls ios | grep '\.xcodeproj$' | sed 's/\.xcodeproj//')
+          
+          # 使用 xcodebuild 进行编译，并强制关闭苹果的签名校验
+          xcodebuild -workspace "ios/$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+            
+          # 将编译好的 .app 文件夹打包成巨魔认识的 .ipa 格式
+          cd ios/build/Build/Products/Release-iphoneos
+          mkdir Payload
+          mv "$SCHEME.app" Payload/
+          zip -qr "$SCHEME-TrollStore.ipa" Payload/
+
+      - name: 7. 上传生成的 IPA 文件供你下载
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarDashboard-TrollStore-IPA
+          path: ios/build/Build/Products/Release-iphoneos/*-TrollStore.ipa
