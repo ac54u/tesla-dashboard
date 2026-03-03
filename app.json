@@ -45,7 +45,8 @@
         {
           "locationWhenInUsePermission": "我们需要获取您的定位来显示实时车速并刷新地图导航。"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

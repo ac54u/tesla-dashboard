@@ -1,9 +1,10 @@
 import * as Location from 'expo-location';
+import * as WebBrowser from 'expo-web-browser'; // 【新增】用于唤起登录网页
 import React, { useEffect, useRef, useState } from 'react';
-import { Platform, StatusBar, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, StatusBar, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import Animated, { useAnimatedProps, useSharedValue, withSpring } from 'react-native-reanimated';
-import Svg, { Circle, Path } from 'react-native-svg'; // 【修改】：引入 Path 绘制箭头
+import Svg, { Circle, Path } from 'react-native-svg';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -26,7 +27,10 @@ export default function App() {
   const [gear, setGear] = useState<string>('P');
   const [battery, setBattery] = useState<number>(0);
   const [range, setRange] = useState<number>(0);
-  const [heading, setHeading] = useState<number>(0); // 【新增】：保存航向角度
+  const [heading, setHeading] = useState<number>(0);
+  
+  // 【新增】判断是否需要登录
+  const [needsLogin, setNeedsLogin] = useState<boolean>(false); 
   
   const [mapRegion, setMapRegion] = useState<Region>({
     latitude: 39.9042, 
@@ -52,6 +56,7 @@ export default function App() {
     };
   });
 
+  // 1. 定位与车速监听 (保留您原有的优秀逻辑)
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
 
@@ -73,7 +78,6 @@ export default function App() {
             longitudeDelta: currentDeltas.current.longitudeDelta,
           });
 
-          // 【新增】：更新航向数据
           if (location.coords.heading !== null) {
             setHeading(location.coords.heading);
           }
@@ -96,36 +100,42 @@ export default function App() {
     };
   }, []);
 
+  // 2. 向您的服务器请求真实车辆数据
   useEffect(() => {
     const fetchTeslaData = async () => {
       try {
-        const mockTeslaApiResponse = {
-          response: {
-            drive_state: { 
-              shift_state: speed > 2 ? "D" : "P"
-            },
-            charge_state: { 
-              battery_level: 84, 
-              battery_range: 265.5 
-            }
-          }
-        };
+        // 请求您自己服务器上的接口 (确保后端已经配置了域名反代，或者直接用 http://IP:3000/api/car_data 测试)
+        const response = await fetch('https://dmitt.com/api/car_data');
+        
+        if (response.status === 401) {
+          // 如果服务器返回 401，说明需要登录
+          setNeedsLogin(true);
+          return;
+        }
 
-        const driveData = mockTeslaApiResponse.response.drive_state;
-        const chargeData = mockTeslaApiResponse.response.charge_state;
+        const data = await response.json();
+        setNeedsLogin(false); // 成功拿到数据，隐藏登录界面
 
-        setGear(driveData.shift_state || 'P');
-        setBattery(chargeData.battery_level);
-        setRange(Math.round(chargeData.battery_range * 1.609));
+        setGear(data.gear || 'P');
+        setBattery(data.battery_level || 0);
+        setRange(data.battery_range || 0);
+
       } catch (error) {
-        console.error("获取车辆数据失败:", error);
+        console.error("获取车辆数据失败 (请检查服务器是否运行):", error);
       }
     };
 
     fetchTeslaData();
-    const interval = setInterval(fetchTeslaData, 3000);
+    // 5秒刷新一次，避免被特斯拉接口频繁限流
+    const interval = setInterval(fetchTeslaData, 5000); 
     return () => clearInterval(interval);
-  }, [speed]);
+  }, []);
+
+  // 处理点击登录
+  const handleLogin = async () => {
+    // 唤起手机内置浏览器，访问您服务器的登录接口
+    await WebBrowser.openBrowserAsync('https://dmitt.com/login');
+  };
 
   return (
     <View style={styles.container}>
@@ -147,19 +157,17 @@ export default function App() {
           };
         }}
       >
-        {/* 【修改】：复刻图中特斯拉红色箭头图标 */}
         <Marker
           coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }}
           anchor={{ x: 0.5, y: 0.5 }}
-          rotation={heading} // 让箭头随车头方向旋转
-          flat={true} // 让图标贴合地图平面，旋转时更自然
+          rotation={heading}
+          flat={true}
         >
           <View style={styles.teslaArrowContainer}>
             <Svg width="40" height="40" viewBox="0 0 100 100">
-              {/* 绘制红色箭头路径 */}
               <Path
                 d="M50 5 L95 95 L50 75 L5 95 Z"
-                fill="#E82127" // 特斯拉官方红
+                fill="#E82127"
                 stroke="#FFFFFF"
                 strokeWidth="4"
                 strokeLinejoin="round"
@@ -208,6 +216,19 @@ export default function App() {
             <Text style={styles.dataPanelTextFull}>续航 {range} km</Text>
           </View>
         </View>
+
+        {/* 【新增】未登录时的遮罩和登录按钮 */}
+        {needsLogin && (
+          <View style={styles.loginOverlay}>
+            <View style={styles.loginCard}>
+              <Text style={styles.loginTitle}>尚未连接到车辆</Text>
+              <Text style={styles.loginSubText}>请授权获取车辆实时数据</Text>
+              <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
+                <Text style={styles.loginButtonText}>登录 Tesla 账号</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -232,18 +253,13 @@ const styles = StyleSheet.create({
   dataIcon: { fontSize: 28 },
   dataPanelRowFull: { alignItems: 'center', marginTop: 5 },
   dataPanelTextFull: { color: '#AAAAAA', fontSize: 16, fontWeight: 'bold' },
+  teslaArrowContainer: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8 },
   
-  // 【新增】：红色箭头 Marker 的容器样式
-  teslaArrowContainer: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    // 给箭头增加一点立体感阴影
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 8,
-  },
+  // 【新增】登录界面相关样式
+  loginOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', zIndex: 999 },
+  loginCard: { backgroundColor: '#1E1E1E', padding: 30, borderRadius: 20, alignItems: 'center', width: '80%', borderWidth: 1, borderColor: '#333' },
+  loginTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
+  loginSubText: { color: '#AAAAAA', fontSize: 14, marginBottom: 30, textAlign: 'center' },
+  loginButton: { backgroundColor: '#E82127', paddingVertical: 15, paddingHorizontal: 30, borderRadius: 30, width: '100%', alignItems: 'center' },
+  loginButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
 });
